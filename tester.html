@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>LiveKit API Control Panel</title>
+    <script src="./livekit-client.umd.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 1em 2em; background-color: #f8f9fa; color: #212529; }
+        fieldset { border: 1px solid #dee2e6; border-radius: 8px; margin-bottom: 1.5em; padding: 1em 1.5em; }
+        legend { font-weight: 600; padding: 0 0.5em; }
+        input { width: calc(100% - 12px); margin-bottom: 10px; padding: 8px; border: 1px solid #ced4da; border-radius: 4px; }
+        button { padding: 10px 15px; border: none; border-radius: 4px; color: white; background-color: #0d6efd; cursor: pointer; margin-right: 5px; }
+        button:hover { background-color: #0b5ed7; }
+        .delete-btn { background-color: #dc3545; }
+        .delete-btn:hover { background-color: #bb2d3b; }
+        pre { background-color: #e9ecef; padding: 1em; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
+        #room-list div { border-bottom: 1px solid #dee2e6; padding: 10px 0; }
+        #room-list div:last-child { border-bottom: none; }
+        .container { display: flex; gap: 2em; }
+        .left-panel, .right-panel { flex: 1; }
+    </style>
+</head>
+<body>
+    <h1>Bảng điều khiển API LiveKit</h1>
+
+    <fieldset>
+        <legend>Cấu hình</legend>
+        <label for="apiUrl">API Base URL:</label>
+        <input type="text" id="apiUrl" value="http://localhost:8000">
+        <label for="livekitUrl">LiveKit WS URL:</label>
+        <input type="text" id="livekitUrl" value="wss://first-project-3e42z5fv.livekit.cloud">
+    </fieldset>
+
+    <div class="container">
+        <div class="left-panel">
+            <fieldset>
+                <legend>1. Tạo phòng mới</legend>
+                <label for="createRoomName">Tên phòng:</label>
+                <input type="text" id="createRoomName" value="my-awesome-stream">
+                <button onclick="createRoom()">Tạo phòng</button>
+            </fieldset>
+
+            <fieldset>
+                <legend>2. Tham gia phòng</legend>
+                <label for="joinRoomName">Tên phòng để tham gia:</label>
+                <input type="text" id="joinRoomName" value="my-awesome-stream">
+                <label for="participantName">Tên người tham gia:</label>
+                <input type="text" id="participantName" value="user-demo">
+                <button onclick="joinRoom()">Lấy Token & Tham gia</button>
+            </fieldset>
+
+             <fieldset>
+                <legend>3. Quản lý phòng</legend>
+                <label for="deleteRoomName">Tên phòng để xóa:</label>
+                <input type="text" id="deleteRoomName">
+                <button class="delete-btn" onclick="deleteRoom()">Xóa phòng</button>
+            </fieldset>
+        </div>
+        <div class="right-panel">
+            <fieldset>
+                <legend>Trạng thái các phòng (nhấn để làm mới)</legend>
+                <button onclick="listRooms()">Làm mới danh sách</button>
+                <div id="room-list">Chưa có thông tin...</div>
+            </fieldset>
+
+             <fieldset>
+                <legend>Cập nhật Real-time (WebSocket)</legend>
+                <div id="ws-status">Chưa kết nối WebSocket...</div>
+            </fieldset>
+        </div>
+    </div>
+    
+    <fieldset>
+        <legend>Nhật ký hoạt động</legend>
+        <pre id="log">Nhật ký sẽ xuất hiện ở đây...</pre>
+    </fieldset>
+
+    <script>
+        const apiUrlInput = document.getElementById('apiUrl');
+        const livekitUrlInput = document.getElementById('livekitUrl');
+        const logDiv = document.getElementById('log');
+        
+        let roomConnection = null;
+        let webSocket = null;
+
+        function log(message) {
+            console.log(message);
+            logDiv.textContent = `${new Date().toLocaleTimeString()}: ${message}\n` + logDiv.textContent;
+        }
+
+        async function createRoom() {
+            const roomName = document.getElementById('createRoomName').value;
+            if (!roomName) {
+                alert('Vui lòng nhập tên phòng');
+                return;
+            }
+            log(`Đang tạo phòng '${roomName}'...`);
+            try {
+                const response = await fetch(`${apiUrlInput.value}/rooms/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: roomName,
+                        max_participants: 50,
+                        empty_timeout: 300
+                    }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Lỗi không xác định');
+                log(`✅ Tạo phòng '${data.room.name}' thành công! SID: ${data.room.sid}`);
+                document.getElementById('joinRoomName').value = roomName;
+                document.getElementById('deleteRoomName').value = roomName;
+                await listRooms();
+            } catch (error) {
+                log(`❌ Lỗi khi tạo phòng: ${error.message}`);
+            }
+        }
+
+        async function joinRoom() {
+            const roomName = document.getElementById('joinRoomName').value;
+            const participantName = document.getElementById('participantName').value;
+            if (!roomName || !participantName) {
+                alert('Vui lòng nhập tên phòng và tên người tham gia');
+                return;
+            }
+
+            log(`Đang lấy token cho '${participantName}' để vào phòng '${roomName}'...`);
+            try {
+                const response = await fetch(`${apiUrlInput.value}/rooms/${roomName}/join`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        room_name: roomName,
+                        participant_name: participantName
+                    }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Lỗi không xác định');
+                log(`✅ Lấy token thành công.`);
+                
+                if (roomConnection && roomConnection.state !== 'disconnected') {
+                    await roomConnection.disconnect();
+                    log('Đã ngắt kết nối phòng cũ.');
+                }
+
+                // =======================================================
+                // SỬA LỖI TẠI ĐÂY
+                roomConnection = new LivekitClient.Room();
+                // =======================================================
+
+                log(`Đang kết nối tới LiveKit server tại ${livekitUrlInput.value}...`);
+                await roomConnection.connect(livekitUrlInput.value, data.token);
+                log(`✅ Đã kết nối vào phòng '${roomName}' thành công!`);
+
+                connectWebSocket(roomName);
+                await listRooms();
+            } catch (error) {
+                log(`❌ Lỗi khi tham gia phòng: ${error.message}`);
+            }
+        }
+
+        async function listRooms() {
+            log('Đang lấy danh sách phòng...');
+            try {
+                const response = await fetch(`${apiUrlInput.value}/rooms`);
+                const rooms = await response.json();
+                if (!response.ok) throw new Error(rooms.detail || 'Lỗi không xác định');
+
+                const roomListDiv = document.getElementById('room-list');
+                roomListDiv.innerHTML = '';
+                if (rooms.length === 0) {
+                    roomListDiv.textContent = 'Không có phòng nào đang hoạt động.';
+                } else {
+                    rooms.forEach(room => {
+                        const roomEl = document.createElement('div');
+                        roomEl.innerHTML = `
+                            <strong>${room.name}</strong><br>
+                            Số người tham gia: ${room.num_participants} / ${room.max_participants}<br>
+                            SID: ${room.sid}
+                        `;
+                        roomListDiv.appendChild(roomEl);
+                    });
+                }
+                log(`✅ Lấy danh sách phòng thành công, có ${rooms.length} phòng.`);
+            } catch (error) {
+                log(`❌ Lỗi khi lấy danh sách phòng: ${error.message}`);
+            }
+        }
+
+        async function deleteRoom() {
+            const roomName = document.getElementById('deleteRoomName').value;
+             if (!roomName) {
+                alert('Vui lòng nhập tên phòng cần xóa');
+                return;
+            }
+            if (!confirm(`Bạn có chắc muốn xóa phòng '${roomName}' không?`)) return;
+
+            log(`Đang xóa phòng '${roomName}'...`);
+            try {
+                const response = await fetch(`${apiUrlInput.value}/rooms/${roomName}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Lỗi không xác định');
+                log(`✅ Xóa phòng '${roomName}' thành công!`);
+                await listRooms();
+            } catch (error) {
+                log(`❌ Lỗi khi xóa phòng: ${error.message}`);
+            }
+        }
+        
+        function connectWebSocket(roomName) {
+            const wsStatusDiv = document.getElementById('ws-status');
+            const wsUrl = `${apiUrlInput.value.replace('http', 'ws')}/ws/rooms/${roomName}`;
+            
+            if (webSocket && webSocket.readyState === WebSocket.OPEN) {
+                webSocket.close();
+            }
+
+            log(`Đang kết nối WebSocket tới ${wsUrl}...`);
+            webSocket = new WebSocket(wsUrl);
+
+            webSocket.onopen = () => {
+                log('✅ WebSocket đã kết nối.');
+                wsStatusDiv.textContent = `Đã kết nối tới phòng ${roomName}.`;
+            };
+
+            webSocket.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                if (message.type === 'room_update') {
+                    const data = message.data;
+                    wsStatusDiv.textContent = `[UPDATE] Phòng ${data.name}: ${data.num_participants} người tham gia.`;
+                    listRooms();
+                }
+            };
+
+            webSocket.onerror = (error) => {
+                log(`❌ Lỗi WebSocket: ${error.message}`);
+                wsStatusDiv.textContent = 'Lỗi kết nối WebSocket.';
+            };
+
+            webSocket.onclose = () => {
+                log('WebSocket đã đóng.');
+                wsStatusDiv.textContent = 'Chưa kết nối WebSocket...';
+            };
+        }
+
+        // Tải danh sách phòng khi mở trang
+        window.onload = listRooms;
+    </script>
+</body>
+</html>
